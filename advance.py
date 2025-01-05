@@ -622,18 +622,31 @@ def main():
     initialize_session_state()
     
     st.title("📚 Study Assistant")
+    st.markdown('<h3 style="font-size: 18px;">Content generate will be completely from Book or Pdf that will be uploaded</h3>', unsafe_allow_html=True)
     st.caption("Upload PDFs and ask questions about the content")
     st.caption("please upload module wise content and don't upload whole book")
     
-    
+    st.markdown(
+    """
+    <style>
+    .css-1d391kg {
+        max-width: 100px;
+    }
+    </style>
+    """, unsafe_allow_html=True
+)
+
+    # Sidebar content
     with st.sidebar:
         st.header("Usage Statistics")
         st.metric("Questions Asked", len(st.session_state.qa_pairs))
+
         if hasattr(st.session_state, 'vector_store'):
             st.success("PDFs Processed ✓")
         else:
             st.warning("No PDFs Processed")
-    
+
+    # Main content with columns
     col1, col2 = st.columns([1, 1])
     
     with col1:
