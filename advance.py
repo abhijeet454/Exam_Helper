@@ -26,119 +26,66 @@ from pathlib import Path
 from threading import Lock
 from collections import defaultdict
 
-# Load environment variables
 load_dotenv()
 
-# Configuration
 MAX_REQUESTS_PER_MINUTE = 1000
 MAX_UPLOAD_SIZE_MB = 50
-CACHE_TTL = 3600  # 1 hour
+CACHE_TTL = 3600
 MAX_CACHED_ENTRIES = 10
 
-# Initialize Google API
 os.environ["GOOGLE_API_KEY"] = os.getenv("GEMINI_API_KEY", "")
 
 class UserVectorStore:
-    """
-    Enhanced vector store manager for multi-user support with improved concurrency handling
-    and session management.
-    """
     def __init__(self, cleanup_interval: int = 3600):
-        """
-        Initialize the UserVectorStore.
-        
-        Args:
-            cleanup_interval (int): Interval in seconds for cleaning up old stores
-        """
         self.base_dir = Path(os.getenv("VECTOR_STORE_PATH", "user_vector_stores"))
         self.base_dir.mkdir(exist_ok=True, parents=True)
-        self.locks = {}  # Dictionary to store locks per user
-        self.global_lock = Lock()  # Global lock for user management
+        self.locks = {}
+        self.global_lock = Lock()
         self.cleanup_interval = cleanup_interval
         self.last_cleanup = time.time()
         
     def _get_user_lock(self, user_id: str) -> Lock:
-        """
-        Get or create a lock for a specific user.
-        
-        Args:
-            user_id (str): Unique user identifier
-            
-        Returns:
-            threading.Lock: Lock object for the user
-        """
         with self.global_lock:
             if user_id not in self.locks:
                 self.locks[user_id] = Lock()
             return self.locks[user_id]
     
     def get_user_dir(self, user_id: str) -> Path:
-        """
-        Get directory for specific user.
-        
-        Args:
-            user_id (str): Unique user identifier
-            
-        Returns:
-            Path: Path object for the user directory
-        """
         user_dir = self.base_dir / user_id
         user_dir.mkdir(exist_ok=True, parents=True)
         return user_dir
     
     def get_session_dir(self, user_id: str, session_id: str) -> Path:
-        """
-        Get directory for specific session.
-        
-        Args:
-            user_id (str): Unique user identifier
-            session_id (str): Unique session identifier
-            
-        Returns:
-            Path: Path object for the session directory
-        """
         session_dir = self.get_user_dir(user_id) / session_id
         session_dir.mkdir(exist_ok=True, parents=True)
         return session_dir
     
     def cleanup_old_stores(self, max_age: int = 3600):
-        """
-        Clean up vector stores older than specified age.
-        
-        Args:
-            max_age (int): Maximum age in seconds for stores to keep
-        """
         current_time = time.time()
         
-        # Only cleanup if enough time has passed since last cleanup
         if current_time - self.last_cleanup < self.cleanup_interval:
             return
             
         with self.global_lock:
             try:
-                # Iterate through all user directories
                 for user_dir in self.base_dir.iterdir():
                     if not user_dir.is_dir():
                         continue
                         
-                    # Get user lock
                     user_id = user_dir.name
                     user_lock = self._get_user_lock(user_id)
                     
                     with user_lock:
-                        # Cleanup user's sessions
                         for session_dir in user_dir.iterdir():
                             if not session_dir.is_dir():
                                 continue
                                 
-                            # Check if session is too old
                             if current_time - session_dir.stat().st_mtime > max_age:
                                 try:
                                     shutil.rmtree(session_dir)
                                 except Exception as e:
                                     st.error(f"Error cleaning up session {session_dir}: {str(e)}")
                                     
-                        # Remove empty user directory
                         if not any(user_dir.iterdir()):
                             user_dir.rmdir()
                             with self.global_lock:
@@ -150,22 +97,12 @@ class UserVectorStore:
                 st.error(f"Error during cleanup: {str(e)}")
     
     def save_store(self, user_id: str, session_id: str, store: FAISS, metadata: dict):
-        """
-        Save vector store for a session.
-        
-        Args:
-            user_id (str): Unique user identifier
-            session_id (str): Unique session identifier
-            store (FAISS): FAISS vector store object
-            metadata (dict): Metadata associated with the store
-        """
         user_lock = self._get_user_lock(user_id)
         with user_lock:
             try:
                 session_dir = self.get_session_dir(user_id, session_id)
                 store.save_local(str(session_dir / "store.faiss"))
                 
-                # Add timestamp to metadata
                 metadata['last_modified'] = datetime.now().isoformat()
                 
                 with open(session_dir / "metadata.json", 'w') as f:
@@ -176,16 +113,6 @@ class UserVectorStore:
                 raise
     
     def load_store(self, user_id: str, session_id: str) -> tuple[FAISS | None, dict | None]:
-        """
-        Load vector store for a session.
-        
-        Args:
-            user_id (str): Unique user identifier
-            session_id (str): Unique session identifier
-            
-        Returns:
-            tuple: (FAISS store object, metadata dictionary) or (None, None) if not found
-        """
         user_lock = self._get_user_lock(user_id)
         with user_lock:
             try:
@@ -197,7 +124,6 @@ class UserVectorStore:
                     with open(meta_path, 'r') as f:
                         metadata = json.load(f)
                     
-                    # Check if store is still valid (not too old)
                     last_modified = datetime.fromisoformat(metadata.get('last_modified', '2000-01-01'))
                     if datetime.now() - last_modified > timedelta(hours=1):
                         self.delete_store(user_id, session_id)
@@ -214,13 +140,6 @@ class UserVectorStore:
                 return None, None
     
     def delete_store(self, user_id: str, session_id: str):
-        """
-        Delete vector store for a session.
-        
-        Args:
-            user_id (str): Unique user identifier
-            session_id (str): Unique session identifier
-        """
         user_lock = self._get_user_lock(user_id)
         with user_lock:
             try:
@@ -228,7 +147,6 @@ class UserVectorStore:
                 if session_dir.exists():
                     shutil.rmtree(session_dir)
                     
-                # Clean up empty user directory if needed
                 user_dir = self.get_user_dir(user_id)
                 if not any(user_dir.iterdir()):
                     user_dir.rmdir()
@@ -240,15 +158,6 @@ class UserVectorStore:
                 raise
 
     def get_user_stats(self, user_id: str) -> dict:
-        """
-        Get statistics for a specific user.
-        
-        Args:
-            user_id (str): Unique user identifier
-            
-        Returns:
-            dict: Dictionary containing user statistics
-        """
         user_lock = self._get_user_lock(user_id)
         with user_lock:
             try:
@@ -288,11 +197,10 @@ class UserVectorStore:
                     'total_stores': 0,
                     'latest_activity': None
                 }
-# Initialize vector store manager
-vector_store_manager = UserVectorStore(cleanup_interval=3600)  # Cleanup every hour
+
+vector_store_manager = UserVectorStore(cleanup_interval=3600)
 
 def get_session_id():
-    """Generate or retrieve session ID"""
     if 'session_id' not in st.session_state:
         st.session_state.session_id = hashlib.sha256(
             str(time.time() + random.random()).encode()
@@ -300,30 +208,23 @@ def get_session_id():
     return st.session_state.session_id
 
 def initialize_session_state():
-    """Initialize or reset session state with user and session management"""
-    
-    # Initialize user_id if not present
     if 'user_id' not in st.session_state:
         st.session_state.user_id = hashlib.sha256(
             str(time.time()).encode()
         ).hexdigest()[:16]
     
-    # Initialize session_id if not present
     if 'session_id' not in st.session_state:
         st.session_state.session_id = hashlib.sha256(
             str(time.time() + random.random()).encode()
         ).hexdigest()[:16]
     
-    # Initialize session state variables
     if 'session_init' not in st.session_state:
         st.session_state.session_init = True
-        # Clean up previous session data with both user_id and session_id
         vector_store_manager.delete_store(
             user_id=st.session_state.user_id,
             session_id=st.session_state.session_id
         )
     
-    # Initialize other session state variables
     if 'qa_pairs' not in st.session_state:
         st.session_state.qa_pairs = []
     
@@ -332,6 +233,7 @@ def initialize_session_state():
     
     if 'asked_questions' not in st.session_state:
         st.session_state.asked_questions = {}
+
 def validate_pdf_size(pdf):
     return pdf.size <= MAX_UPLOAD_SIZE_MB * 1024 * 1024
 
@@ -444,7 +346,6 @@ def get_vector_store(pdf_docs):
         user_id = st.session_state.get('user_id')
         session_id = get_session_id()
         
-        # Process PDFs and create vector store
         text, figures = get_pdf_text(pdf_docs)
         chunks = get_text_chunks(text)
         
@@ -484,7 +385,6 @@ def create_pdf(qa_pairs):
     
     styles = getSampleStyleSheet()
     
-    # Define custom styles
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Heading1'],
@@ -522,13 +422,11 @@ def create_pdf(qa_pairs):
         leading=16
     )
     
-    # Helper function to process text and create paragraphs
     def format_text(text):
         formatted_content = []
         paragraphs = text.split('\n\n')
         
         for para in paragraphs:
-            # Handle bullet points
             if para.strip().startswith('*') or para.strip().startswith('-'):
                 lines = para.split('\n')
                 for line in lines:
@@ -539,7 +437,6 @@ def create_pdf(qa_pairs):
                                 bullet_style
                             )
                         )
-            # Handle numbered lists
             elif any(line.strip().startswith(str(i) + '.') for i in range(1, 10) for line in para.split('\n')):
                 lines = para.split('\n')
                 for line in lines:
@@ -550,26 +447,21 @@ def create_pdf(qa_pairs):
                                 bullet_style
                             )
                         )
-            # Regular paragraphs
             else:
                 formatted_content.append(Paragraph(para.strip(), answer_style))
                 
         return formatted_content
     
-    # Build PDF content
     content = []
     content.append(Paragraph("Study Notes", title_style))
     content.append(Spacer(1, 20))
     
     for qa in qa_pairs:
-        # Add question
         content.append(Paragraph(f"Question: {qa['question']}", question_style))
         
-        # Add answer with formatting
         answer_paragraphs = format_text(qa['answer'])
         content.extend(answer_paragraphs)
         
-        # Add references if present
         if qa.get('references') or qa.get('figures'):
             content.append(Spacer(1, 10))
             if qa.get('references'):
@@ -606,17 +498,6 @@ def delete_qa(index):
         for qa in st.session_state.qa_pairs
     }
 
-import streamlit as st
-
-import streamlit as st
-import os
-
-import streamlit as st
-import os
-
-import streamlit as st
-import os
-
 def main():
     st.set_page_config(page_title="Study Assistant", page_icon="📚", layout="wide")
     initialize_session_state()
@@ -636,7 +517,6 @@ def main():
     """, unsafe_allow_html=True
 )
 
-    # Sidebar content
     with st.sidebar:
         st.header("Usage Statistics")
         st.metric("Questions Asked", len(st.session_state.qa_pairs))
@@ -646,7 +526,6 @@ def main():
         else:
             st.warning("No PDFs Processed")
 
-    # Main content with columns
     col1, col2 = st.columns([1, 1])
     
     with col1:
@@ -747,7 +626,6 @@ def main():
         else:
             st.info("Ask questions to see your history here")
 
-    # Developer Profile Section
     st.markdown("---")
     
     col1, col2 = st.columns([1, 3])
@@ -773,5 +651,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
